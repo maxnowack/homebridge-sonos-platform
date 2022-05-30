@@ -1,11 +1,13 @@
-import { API } from 'homebridge';
-
-import { PLATFORM_NAME } from './settings';
-import { ExampleHomebridgePlatform } from './platform';
+// eslint-disable-next-line import/no-extraneous-dependencies
+import { API } from 'homebridge'
+import { PLATFORM_NAME } from './settings'
+import SonosHomebridgePlatform from './platform'
 
 /**
  * This method registers the platform with Homebridge
  */
 export = (api: API) => {
-  api.registerPlatform(PLATFORM_NAME, ExampleHomebridgePlatform);
-};
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  api.registerPlatform(PLATFORM_NAME, SonosHomebridgePlatform)
+}

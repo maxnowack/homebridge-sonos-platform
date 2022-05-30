@@ -1,5 +1,5 @@
 {
-  "pluginAlias": "ExampleHomebridgePlugin",
+  "pluginAlias": "Sonos",
   "pluginType": "platform",
   "singular": true,
   "schema": {
@@ -9,7 +9,18 @@
         "title": "Name",
         "type": "string",
         "required": true,
-        "default": "Example Dynamic Platform"
+        "default": "Sonos",
+        "placeholder": "e.g. Sonos",
+        "description": "Name for this Sonos connection."
+      },
+      "hostname": {
+        "type": "string",
+        "format": "hostname",
+        "title": "Speaker Hostname",
+        "required": false,
+        "default": "",
+        "placeholder": "e.g. 192.168.96.56",
+        "description": "In some network situations (or Docker usage) SSDP won't work, but you can also initialize the platform if you know one (static) IP of a single speaker."
       }
     }
   }

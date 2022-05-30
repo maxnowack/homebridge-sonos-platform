@@ -1,141 +1,197 @@
-import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge';
+// eslint-disable-next-line import/no-extraneous-dependencies
+import { Service, PlatformAccessory, CharacteristicValue } from 'homebridge'
+import { SonosDevice, SonosEvents } from '@svrooij/sonos'
+import { TransportState } from '@svrooij/sonos/lib/models'
+import { AccessoryContext } from './interfaces'
+// eslint-disable-next-line import/no-cycle
+import SonosHomebridgePlatform from './platform'
+import Manager from './manager'
 
-import { ExampleHomebridgePlatform } from './platform';
+enum TargetMediaState {
+  PLAY = 0,
+  PAUSE = 1,
+  STOP = 2,
+}
+enum CurrentMediaState {
+  PLAY = 0,
+  PAUSE = 1,
+  STOP = 2,
+  LOADING = 4,
+  INTERRUPTED = 5,
+}
 
 /**
  * Platform Accessory
  * An instance of this class is created for each accessory your platform registers
  * Each accessory may expose multiple services of different service types.
  */
-export class ExamplePlatformAccessory {
-  private service: Service;
+export default class SonosPlatformAccessory {
+  private infoService = this.accessory
+    .getService(this.platform.Service.AccessoryInformation) as Service
 
-  /**
-   * These are just used to create a working example
-   * You should implement your own code to track the state of your accessory
-   */
-  private exampleStates = {
-    On: false,
-    Brightness: 100,
-  };
+  private speakerService = this.accessory
+    .getService(this.platform.Service.SmartSpeaker) || this.accessory
+    .addService(this.platform.Service.SmartSpeaker)
+
+  private targetMediaState?: TargetMediaState
+
+  private currentMediaState: CurrentMediaState = CurrentMediaState.LOADING
 
   constructor(
-    private readonly platform: ExampleHomebridgePlatform,
-    private readonly accessory: PlatformAccessory,
+    private readonly platform: SonosHomebridgePlatform,
+    private readonly accessory: PlatformAccessory<AccessoryContext>,
   ) {
+    this.loadServices()
+      .catch((err) => {
+        this.platform.log.error('loading services failed:', err)
+      })
+    this.registerEvents()
+  }
 
+  getDevice() {
+    const device = Manager.getDevice(this.accessory.context.uuid)
+    if (!device) throw new Error('cannot find device')
+    return device
+  }
+
+  async loadServices() {
+    const device = this.getDevice()
     // set accessory information
-    this.accessory.getService(this.platform.Service.AccessoryInformation)!
-      .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Default-Manufacturer')
-      .setCharacteristic(this.platform.Characteristic.Model, 'Default-Model')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, 'Default-Serial');
 
-    // get the LightBulb service if it exists, otherwise create a new LightBulb service
-    // you can create multiple services for each accessory
-    this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
+    await device.LoadDeviceData()
+    const deviceInfo = await device.GetDeviceDescription()
+    this.setInfoCharacteristics(deviceInfo)
 
-    // set the service name, this is what is displayed as the default name on the Home app
-    // in this example we are using the name we stored in the `accessory.context` in the `discoverDevices` method.
-    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.exampleDisplayName);
+    this.speakerService.setCharacteristic(
+      this.platform.Characteristic.Name,
+      device.Name,
+    )
+    this.speakerService.setCharacteristic(
+      this.platform.Characteristic.ConfiguredName,
+      device.Name,
+    )
 
-    // each service must implement at-minimum the "required characteristics" for the given service type
-    // see https://developers.homebridge.io/#/service/Lightbulb
-
-    // register handlers for the On/Off Characteristic
-    this.service.getCharacteristic(this.platform.Characteristic.On)
-      .onSet(this.setOn.bind(this))                // SET - bind to the `setOn` method below
-      .onGet(this.getOn.bind(this));               // GET - bind to the `getOn` method below
-
-    // register handlers for the Brightness Characteristic
-    this.service.getCharacteristic(this.platform.Characteristic.Brightness)
-      .onSet(this.setBrightness.bind(this));       // SET - bind to the 'setBrightness` method below
-
-    /**
-     * Creating multiple services of the same type.
-     *
-     * To avoid "Cannot add a Service with the same UUID another Service without also defining a unique 'subtype' property." error,
-     * when creating multiple services of the same type, you need to use the following syntax to specify a name and subtype id:
-     * this.accessory.getService('NAME') || this.accessory.addService(this.platform.Service.Lightbulb, 'NAME', 'USER_DEFINED_SUBTYPE_ID');
-     *
-     * The USER_DEFINED_SUBTYPE must be unique to the platform accessory (if you platform exposes multiple accessories, each accessory
-     * can use the same sub type id.)
-     */
-
-    // Example: add two "motion sensor" services to the accessory
-    const motionSensorOneService = this.accessory.getService('Motion Sensor One Name') ||
-      this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor One Name', 'YourUniqueIdentifier-1');
-
-    const motionSensorTwoService = this.accessory.getService('Motion Sensor Two Name') ||
-      this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor Two Name', 'YourUniqueIdentifier-2');
-
-    /**
-     * Updating characteristics values asynchronously.
-     *
-     * Example showing how to update the state of a Characteristic asynchronously instead
-     * of using the `on('get')` handlers.
-     * Here we change update the motion sensor trigger states on and off every 10 seconds
-     * the `updateCharacteristic` method.
-     *
-     */
-    let motionDetected = false;
-    setInterval(() => {
-      // EXAMPLE - inverse the trigger
-      motionDetected = !motionDetected;
-
-      // push the new value to HomeKit
-      motionSensorOneService.updateCharacteristic(this.platform.Characteristic.MotionDetected, motionDetected);
-      motionSensorTwoService.updateCharacteristic(this.platform.Characteristic.MotionDetected, !motionDetected);
-
-      this.platform.log.debug('Triggering motionSensorOneService:', motionDetected);
-      this.platform.log.debug('Triggering motionSensorTwoService:', !motionDetected);
-    }, 10000);
+    this.speakerService.getCharacteristic(this.platform.Characteristic.CurrentMediaState)
+      .onGet(this.getCurrentMediaState.bind(this))
+    this.speakerService.getCharacteristic(this.platform.Characteristic.TargetMediaState)
+      .onGet(this.getTargetMediaState.bind(this))
+      .onSet(this.setTargetMediaState.bind(this))
+    this.speakerService.getCharacteristic(this.platform.Characteristic.Mute)
+      .onGet(this.getMute.bind(this))
+      .onSet(this.setMute.bind(this))
+    this.speakerService.getCharacteristic(this.platform.Characteristic.Volume)
+      .onGet(this.getVolume.bind(this))
+      .onSet(this.setVolume.bind(this))
   }
 
-  /**
-   * Handle "SET" requests from HomeKit
-   * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
-   */
-  async setOn(value: CharacteristicValue) {
-    // implement your own code to turn your device on/off
-    this.exampleStates.On = value as boolean;
+  registerEvents() {
+    const device = this.getDevice()
+    const { Characteristic } = this.platform
+    device.Events.on(SonosEvents.Mute, (muted) => {
+      this.speakerService.updateCharacteristic(Characteristic.Mute, muted)
+    })
+    device.Events.on(SonosEvents.Volume, (volume) => {
+      this.speakerService.updateCharacteristic(Characteristic.Volume, volume)
+    })
 
-    this.platform.log.debug('Set Characteristic On ->', value);
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    device.Events.on(SonosEvents.PlaybackStopped, () => {
+      this.currentMediaState = CurrentMediaState.STOP
+      this.speakerService.updateCharacteristic(
+        Characteristic.CurrentMediaState,
+        CurrentMediaState.STOP,
+      )
+    })
+    device.Events.on(SonosEvents.CurrentTrackMetadata, (data) => {
+      console.log('current', data)
+      this.currentMediaState = CurrentMediaState.PLAY
+      this.speakerService.updateCharacteristic(
+        Characteristic.CurrentMediaState,
+        CurrentMediaState.PLAY,
+      )
+    })
   }
 
-  /**
-   * Handle the "GET" requests from HomeKit
-   * These are sent when HomeKit wants to know the current state of the accessory, for example, checking if a Light bulb is on.
-   *
-   * GET requests should return as fast as possbile. A long delay here will result in
-   * HomeKit being unresponsive and a bad user experience in general.
-   *
-   * If your device takes time to respond you should update the status of your device
-   * asynchronously instead using the `updateCharacteristic` method instead.
-
-   * @example
-   * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
-   */
-  async getOn(): Promise<CharacteristicValue> {
-    // implement your own code to check if the device is on
-    const isOn = this.exampleStates.On;
-
-    this.platform.log.debug('Get Characteristic On ->', isOn);
-
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-
-    return isOn;
+  setInfoCharacteristics(deviceInfo: Awaited<ReturnType<SonosDevice['GetDeviceDescription']>>) {
+    this.infoService.setCharacteristic(
+      this.platform.Characteristic.Manufacturer,
+      deviceInfo.manufacturer,
+    )
+    this.infoService.setCharacteristic(
+      this.platform.Characteristic.Model,
+      deviceInfo.modelName,
+    )
+    this.infoService.setCharacteristic(
+      this.platform.Characteristic.Name,
+      deviceInfo.displayName,
+    )
+    this.infoService.setCharacteristic(
+      this.platform.Characteristic.SoftwareRevision,
+      deviceInfo.softwareVersion,
+    )
+    this.infoService.setCharacteristic(
+      this.platform.Characteristic.HardwareRevision,
+      deviceInfo.hardwareVersion,
+    )
+    this.infoService.setCharacteristic(
+      this.platform.Characteristic.SerialNumber,
+      deviceInfo.serialNumber,
+    )
   }
 
-  /**
-   * Handle "SET" requests from HomeKit
-   * These are sent when the user changes the state of an accessory, for example, changing the Brightness
-   */
-  async setBrightness(value: CharacteristicValue) {
-    // implement your own code to set the brightness
-    this.exampleStates.Brightness = value as number;
-
-    this.platform.log.debug('Set Characteristic Brightness -> ', value);
+  async getCurrentMediaState(): Promise<CharacteristicValue> {
+    const device = this.getDevice()
+    const state = await device.GetState()
+    switch (state.transportState) {
+      case TransportState.Playing: return CurrentMediaState.PLAY
+      case TransportState.Paused: return CurrentMediaState.PAUSE
+      case TransportState.Stopped: return CurrentMediaState.STOP
+      case TransportState.Transitioning: return CurrentMediaState.PLAY
+      default: return CurrentMediaState.LOADING
+    }
   }
 
+  async getTargetMediaState(): Promise<CharacteristicValue> {
+    if (this.targetMediaState != null) return this.targetMediaState
+    const currentMediaState = await this.getCurrentMediaState()
+    console.log({ currentMediaState })
+    if (currentMediaState <= CurrentMediaState.PLAY) return currentMediaState
+    return TargetMediaState.STOP
+  }
+
+  async getMute(): Promise<CharacteristicValue> {
+    const device = this.getDevice()
+    const state = await device.GetState()
+    console.log({ state })
+    return state.muted || state.volume === 0
+  }
+
+  async getVolume(): Promise<CharacteristicValue> {
+    const device = this.getDevice()
+    const state = await device.GetState()
+    console.log({ state })
+    return state.volume
+  }
+
+  async setTargetMediaState(value: CharacteristicValue) {
+    this.targetMediaState = value as TargetMediaState
+    const device = this.getDevice()
+
+    switch (value) {
+      case TargetMediaState.PLAY: return device.Play().then(() => undefined)
+      case TargetMediaState.PAUSE: return device.Pause().then(() => undefined)
+      default: return device.Stop().then(() => undefined)
+    }
+  }
+
+  async setMute(value: CharacteristicValue) {
+    const device = this.getDevice()
+    await device.SetVolume(value ? 0 : 100)
+  }
+
+  async setVolume(value: CharacteristicValue) {
+    const device = this.getDevice()
+    await device.SetVolume(value as number)
+  }
 }
